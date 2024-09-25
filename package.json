@@ -6,7 +6,7 @@
   },
   "scripts": {
     "dev": "NODE_ENV=dev node --experimental-strip-types --watch server.config.ts",
-    "start": "node server.config.ts"
+    "start": "node --experimental-strip-types server.config.ts"
   },
   "devDependencies": {
     "@types/node": "^22.6.1",
