@@ -41,21 +41,30 @@ type Config = {
 }
 
 async function init(config: Config) {
+  const defaults = {
+    static: ['pages'],
+    pagesDir: './pages',
+    snippetsDir: './snippets',
+    snippetsBaseEndpoint: '/snippets',
+    apiBaseEndpoint: '/api',
+    port: config.port || 3003,
+  }
+
   HMRServer(config.hmrPort)
+
+  // add hmr to the error page
+  routes.get('GET')?.set('error', defaultHandler('error', config.hmrPort))
 
   /**
    * add /pages as static folder
    */
-  const sweynStaticFolders = ['pages']
-  sweynStaticFolders.concat(config.static).forEach(s => staticFolders.add(s))
-
-  routes.get('GET')?.set('error', defaultHandler('error', config.hmrPort))
+  defaults.static.concat(config.static).forEach(s => staticFolders.add(s))
 
   /**
    * register files in /pages as routes
    */
-  if (fs.existsSync('pages')) {
-    const files = await fsPromise.readdir('pages')
+  if (fs.existsSync(defaults.pagesDir)) {
+    const files = await fsPromise.readdir(defaults.pagesDir)
 
     files.map(file => {
       const path = file.replace('.html', '')
@@ -68,19 +77,21 @@ async function init(config: Config) {
   /**
    * register files in /api as routes
    */
-  api.forEach(({ method, endpoint, module }) => {
-    routes.get(method)?.set(path.join('/api', endpoint), module)
+  api?.forEach(({ method, endpoint, module }) => {
+    routes
+      .get(method)
+      ?.set(path.join(defaults.apiBaseEndpoint, endpoint), module)
   })
 
   /**
    * add plugins
    */
-  config.plugins.forEach(plugin => middlewares.add(plugin))
+  config.plugins?.forEach(plugin => middlewares.add(plugin))
 
   /**
    * register user defined routes from config
    */
-  config.routes.forEach(item => {
+  config.routes?.forEach(item => {
     const method = item.method?.toUpperCase() || 'GET'
     const { route, handler } = item
     routes.get(method)?.set(route, handler)
@@ -89,26 +100,27 @@ async function init(config: Config) {
   /**
    * register /snippets/file as routes
    */
-  if (fs.existsSync('snippets')) {
-    const snippets = await fsPromise.readdir('snippets')
+  if (fs.existsSync(defaults.snippetsDir)) {
+    const snippets = await fsPromise.readdir(defaults.snippetsDir)
 
     snippets.forEach(snippet => {
       const name = path.parse(snippet).name
-      const route = path.join('/snippets', name)
-      const handler = async (_, res) => {
+      const route = path.join(defaults.snippetsBaseEndpoint, name)
+      const handler = async (req, res) => {
         try {
           const file = await fsPromise.readFile(
-            path.join('./snippets', snippet)
+            path.join(defaults.snippetsDir, snippet)
           )
 
           res.end(file)
         } catch (error) {
-          console.log('????')
-          // res.status(400).send({
-          //   message: 'This is an error!',
-          // })
+          handleError(req, res, {
+            status: 404,
+            message: 'no snippet named:' + snippet,
+          })
         }
       }
+
       routes.get('GET')?.set(route, handler)
     })
   }
@@ -116,9 +128,9 @@ async function init(config: Config) {
   /**
    * start server
    */
-  const port = config.port || 3003
-
-  createServer.listen(port, () => console.log(`http://localhost:${port}`))
+  createServer.listen(defaults.port, () =>
+    console.log(`http://localhost:${defaults.port}`)
+  )
 }
 
 export { init as createServer }

@@ -79,7 +79,7 @@ const getRouteHandler = (requestedRoute, method = 'GET') => {
 
     return matchedRoutesSorted.at(0)
   } catch (error) {
-    throw '404 - No route found' + error
+    throw { status: 404, message: 'No route found' + error }
   }
 }
 
@@ -97,7 +97,7 @@ const getFileFromFS =
     })
   }
 
-export async function streamFile(req, res, fileName) {
+export async function streamFile(req, res, fileName, status = 200) {
   try {
     // loop through all registered static folders and check for the file
     const stream = await Promise.any(
@@ -105,21 +105,24 @@ export async function streamFile(req, res, fileName) {
     )
 
     stream.pipe(
-      res.writeHead(200, { 'Content-Type': CONTENT_TYPES[extname(fileName)] })
+      res.writeHead(status, {
+        'Content-Type': CONTENT_TYPES[extname(fileName)],
+      })
     )
   } catch (error) {
-    res.writeHead(404).end(error.statusText)
-    // return handleError(req, res, '404 - No file found: ' + fileName)
+    res.writeHead(404).end(error.message)
   }
 }
 
 export async function handleError(req, res, error) {
   const { handler } = getRouteHandler('error')
 
-  if (typeof handler === 'string') return await streamFile(req, res, handler)
+  if (typeof handler === 'string')
+    return await streamFile(req, res, handler, error.status)
 
   if (typeof handler === 'function') {
     if (!res.error) res.error = error
+    res.writeHead(error.status)
     return handler(req, res)
   }
 }
@@ -141,7 +144,7 @@ export async function requestHandler(req, res) {
 
     const result = getRouteHandler(resolve(pathname), method)
 
-    if (!result) throw '500 - no route found'
+    if (!result) throw { status: 404, message: 'no route found' }
 
     if (typeof result.handler === 'string')
       return await streamFile(req, res, result.handler)
@@ -156,7 +159,7 @@ export async function requestHandler(req, res) {
       return result.handler(req, res)
     }
 
-    throw '500 - could not handle request'
+    throw { status: 500, message: 'could not handle request' }
   } catch (error) {
     return handleError(req, res, error)
   }
