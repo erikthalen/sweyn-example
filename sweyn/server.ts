@@ -2,24 +2,7 @@ import http from 'node:http'
 import fs, { createReadStream } from 'node:fs'
 import { normalize, join, resolve, extname } from 'node:path'
 import { URL } from 'node:url'
-
-const CONTENT_TYPES = {
-  '.html': 'text/html',
-  '.js': 'application/javascript',
-  '.json': 'application/json',
-  '.css': 'text/css',
-  '.txt': 'text/plain',
-  '.md': 'text/plain',
-  '.ttf': 'font/ttf',
-  '.otf': 'font/otf',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-  '.webp': 'image/webp',
-}
+import { createRequestHandler } from './helpers.ts'
 
 export const staticFolders = new Set(['', 'public'])
 
@@ -53,24 +36,26 @@ const getRouteHandler = (requestedRoute, method = 'GET') => {
     routes.get(method).forEach((handler, registeredRoute) => {
       const [_, ...regUrlArr] = registeredRoute.split('/')
 
+      if (regUrlArr.length !== reqUrlArr.length) return
+      if (!regUrlArr.find(part => part.startsWith('['))) return
+
       const isMatch = reqUrlArr.every((part, idx) => {
-        if (!regUrlArr[idx] || regUrlArr.length !== reqUrlArr.length) return
-        return part === regUrlArr[idx] || regUrlArr[idx].startsWith(':')
+        return part === regUrlArr[idx] || regUrlArr[idx].startsWith('[')
       })
 
-      if (isMatch) {
-        const matches = regUrlArr
-          .map(
-            (part, idx) =>
-              part.includes(':') && {
-                key: part,
-                value: reqUrlArr[idx],
-              }
-          )
-          .filter(Boolean)
+      if (!isMatch) return
 
-        matchedRoutes.push({ matches, handler })
-      }
+      const matches = regUrlArr
+        .map(
+          (part, idx) =>
+            part.startsWith('[') && {
+              key: part.replace('[', '').replace(']', ''),
+              value: reqUrlArr[idx],
+            }
+        )
+        .filter(Boolean)
+
+      matchedRoutes.push({ matches, handler })
     })
 
     const matchedRoutesSorted = matchedRoutes.toSorted((a, b) => {
@@ -97,72 +82,58 @@ const getFileFromFS =
     })
   }
 
-export async function streamFile(req, res, fileName, status = 200) {
+export async function streamFile(filename) {
   try {
-    // loop through all registered static folders and check for the file
-    const stream = await Promise.any(
-      Array.from(staticFolders).map(getFileFromFS(fileName))
-    )
-
-    stream.pipe(
-      res.writeHead(status, {
-        'Content-Type': CONTENT_TYPES[extname(fileName)],
-      })
+    return await Promise.any(
+      Array.from(staticFolders).map(getFileFromFS(filename))
     )
   } catch (error) {
-    res.writeHead(404).end(error.message)
+    throw { status: 404, message: 'streamFile dit not find ' + filename }
   }
 }
 
-export async function handleError(req, res, error) {
-  const { handler } = getRouteHandler('error')
+export function renderErrorPage(req, res) {
+  const errorRoute = getRouteHandler('error')
+  if (typeof errorRoute.handler === 'string')
+    return streamFile(errorRoute.handler)
 
-  if (typeof handler === 'string')
-    return await streamFile(req, res, handler, error.status)
-
-  if (typeof handler === 'function') {
-    if (!res.error) res.error = error
-    res.writeHead(error.status)
-    return handler(req, res)
+  if (typeof errorRoute.handler === 'function') {
+    return errorRoute.handler(req, res)
   }
 }
 
-export async function requestHandler(req, res) {
+export const requestHandler = await createRequestHandler(async (req, res) => {
   const { method, url, headers } = req
   const { pathname, searchParams } = new URL('https://' + headers.host + url)
 
+  // is request for a static file?
+  if (extname(normalize(pathname))) {
+    return await streamFile(resolve(url))
+  }
+
+  const result =
+    getRouteHandler(resolve(pathname), method) || getRouteHandler('error')
+
   try {
-    for (const middleware of Array.from(middlewares)) {
-      await middleware(req, res)
-    }
-
-    if (res.headersSent) return
-
-    // is request for a static file?
-    if (extname(normalize(pathname)))
-      return await streamFile(req, res, resolve(url))
-
-    const result = getRouteHandler(resolve(pathname), method)
-
-    if (!result) throw { status: 404, message: 'no route found' }
-
     if (typeof result.handler === 'string')
-      return await streamFile(req, res, result.handler)
+      return await streamFile(result.handler)
 
-    if (typeof result.handler === 'function') {
+    const handlerFunction = await Promise.resolve(result.handler)
+
+    if (typeof handlerFunction === 'function') {
       result.matches?.forEach(match => {
         if (!req[match.key]) req[match.key] = match.value
       })
 
       req.query = Object.fromEntries(searchParams)
 
-      return result.handler(req, res)
+      return handlerFunction(req, res)
     }
-
-    throw { status: 500, message: 'could not handle request' }
   } catch (error) {
-    return handleError(req, res, error)
+    return 'error no route'
   }
-}
+
+  throw { status: 500, message: 'could not handle request' }
+})
 
 export const createServer = http.createServer(requestHandler)

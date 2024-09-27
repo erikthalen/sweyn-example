@@ -87,6 +87,7 @@ export const renderVariables = (fileString, data = {}) => {
 
 export const renderFile = async (name, data?) => {
   try {
+    console.log('name', name)
     const file = await Promise.any(
       partialPaths.map(getFile(extname(name) ? name : name + extension))
     )

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin</title>
+    <style>
+      * {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+
+      #pages {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 10px;
+      }
+
+      #editor {
+        white-space: pre-line;
+        font-family: Menlo;
+        border: 1px solid;
+        padding: 20px;
+      }
+
+      ul {
+        padding: 0;
+      }
+
+      form {
+        display: grid;
+        justify-items: left;
+        gap: 20px;
+      }
+
+      textarea {
+        width: 70ch;
+        height: 25lh;
+        resize: none;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Admin</h1>
+    <main>
+      <nav>
+        <h2>Pages</h2>
+        <ul id="pages">
+          {{ pages }}
+        </ul>
+
+        <dialog id="new">
+          <p>Enter a name for the new page/file</p>
+
+          <form action="/admin/api/new">
+            <input type="text" name="filename" placeholder="Name" autofocus />
+            <input type="submit" value="Create page" />
+          </form>
+          <button onclick="closeDialog('new')">Close</button>
+        </dialog>
+
+        <button onclick="openDialog('new')">Add new page</button>
+      </nav>
+
+      <h2>Content</h2>
+
+      <form action="/admin/api/save" method="POST">
+        <input type="hidden" name="filename" value="{{ filename }}" />
+        <textarea name="content" id="editor">{{ content }}</textarea>
+        <input type="submit" value="Save" />
+      </form>
+    </main>
+
+    <script>
+      function openDialog(id) {
+        document.getElementById(id)?.showModal()
+      }
+      function closeDialog(id) {
+        document.getElementById(id)?.close()
+      }
+    </script>
+  </body>
+</html>

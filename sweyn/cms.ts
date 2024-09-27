@@ -1,42 +1,38 @@
-import fs from 'fs'
-import path from 'path'
+import fs from 'node:fs'
+import fsPromise from 'node:fs/promises'
+import path, { resolve } from 'node:path'
+import { routes, streamFile } from './server.ts'
+import { createRequestHandler, readBody } from './helpers.ts'
+import { renderVariables } from './renderer.ts'
 
 let rootDir = ''
 
-async function readBody(req): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let body = ''
-    req.on('data', chunk => (body += chunk))
-    req.on('error', reject)
-    req.on('end', () => resolve(body))
-  })
-}
-
 async function saveFile(req, res) {
-  try {
-    const body = await readBody(req)
-    const { content, name } = JSON.parse(body)
-    const filename = path.resolve(rootDir, name + '.md')
+  const body = await readBody(req)
+  const { filename, content } = Object.fromEntries(
+    body.split('&').map(part => part.split('='))
+  )
 
-    fs.mkdirSync('.' + path.dirname(filename), {
-      recursive: true,
-    })
+  fs.mkdirSync('.' + path.dirname(filename), {
+    recursive: true,
+  })
 
-    fs.writeFileSync('.' + filename, content)
+  const decodedContent = decodeURIComponent(content.replaceAll('+', ' '))
 
-    res.end(`Saved ${filename} successfully`)
-  } catch (error) {
-    console.log(error)
-    res.writeHead(500).end('noooope')
-  }
+  fs.writeFileSync(
+    path.join('.', rootDir, filename.replaceAll(' ', '-') + '.md'),
+    decodedContent
+  )
+
+  return `Saved ${filename} successfully`
 }
 
 function authenticate(req, res, login) {
   const { authorization } = req.headers
 
   if (!authorization) {
-    res.writeHead(401, { 'WWW-Authenticate': 'Basic' }).end('Not authorized')
-    return false
+    res.setHeader('WWW-Authenticate', 'Basic')
+    throw { status: 401, message: 'Not authorized' }
   }
 
   const [_, encodedLogin] = authorization.split(' ')
@@ -47,75 +43,101 @@ function authenticate(req, res, login) {
   if (user === login.username && pw === login.password) {
     return true
   } else {
-    res.writeHead(401, { 'WWW-Authenticate': 'Basic' }).end('Not authorized')
-    return false
+    res.setHeader('WWW-Authenticate', 'Basic')
+    throw { status: 401, message: 'Not authorized' }
   }
 }
 
 function getFilepath(file) {
-  return `.${rootDir}/${path.join('./', file)}.md`
+  return path.join('.', rootDir, file + '.md')
 }
 
 export function createCms(options) {
   rootDir = options.root || '/content'
 
-  return (req, res) => {
-    try {
-      const url = new URL('http://foo.bar' + req.url)
+  async function renderCms(req, res) {
+    authenticate(req, res, options)
+    res.setHeader('Content-Type', 'text/html')
+    const index = await fsPromise.readFile(resolve('./sweyn/cms.html'))
+    const pages = fs.readdirSync(`.${rootDir}`, { encoding: 'utf8' })
 
-      if (
-        !url.pathname.startsWith('/admin') &&
-        !url.pathname.startsWith('/cms')
-      )
-        return
+    const menu = pages
+      .map(page => {
+        return `<a href="/admin/${page.replace('.md', '')}">${page}</a>
+          <form action="/admin/api/delete">
+            <input type="hidden" value="${page}" name="page">
+            <input type="submit" value="Delete">
+          </form>`
+      })
+      .join('')
 
-      const authenticated = authenticate(req, res, options)
-
-      if (!authenticated) return
-
-      // render admin page
-      if (url.pathname.startsWith('/admin')) {
-        return res.end(`<html>
-          <head>
-            <title>Admin</title>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-            <script type="module" src="/sweyn/cms.client.js"></script>
-          </head>
-          <body></body>
-        </html>`)
-      }
-
-      // get all pages, by name
-      if (url.pathname === '/cms-get-pages') {
-        const files = fs.readdirSync(`.${rootDir}`, { encoding: 'utf8' })
-        return res.end(JSON.stringify(files))
-      }
-
-      // get content of a page
-      if (url.pathname === '/cms-get-page-content') {
-        const page = url.searchParams.get('page')
-        return res.end(getCmsContent(page))
-      }
-
-      // delete page by name
-      if (url.pathname === '/cms-remove-page') {
-        const page = url.searchParams.get('page')
-
-        fs.unlinkSync(getFilepath(page))
-        return res.end('deleted')
-      }
-
-      // save content of page
-      if (url.pathname === '/cms-save') {
-        return saveFile(req, res)
-      }
-    } catch (error) {
-      console.log(error)
-    }
+    return renderVariables(index.toString(), {
+      pages: menu,
+      content: getContent(req.page),
+      filename: req.page,
+    })
   }
+
+  routes.get('GET').set('/admin', createRequestHandler(renderCms))
+
+  routes.get('GET').set('/admin/[page]', createRequestHandler(renderCms))
+
+  routes.get('GET').set(
+    '/admin/api/pages',
+    createRequestHandler((req, res) => {
+      authenticate(req, res, options)
+      return fs.readdirSync(`.${rootDir}`, { encoding: 'utf8' })
+    })
+  )
+
+  routes.get('GET').set(
+    '/admin/api/content',
+    createRequestHandler((req, res) => {
+      authenticate(req, res, options)
+      const { searchParams } = new URL('http://foo.com' + req.url)
+      return getContent(searchParams.get('page'))
+    })
+  )
+
+  routes.get('GET').set(
+    '/admin/api/delete',
+    createRequestHandler((req, res) => {
+      authenticate(req, res, options)
+      const { searchParams } = new URL('http://foo.com' + req.url)
+      const filename = searchParams.get('page')
+      const filepath = path.join('.', rootDir, filename)
+      fs.unlinkSync(filepath)
+
+      res.writeHead(301, { Location: '/admin' }).end()
+    })
+  )
+
+  routes.get('GET').set(
+    '/admin/api/new',
+    createRequestHandler((req, res) => {
+      authenticate(req, res, options)
+
+      const { searchParams } = new URL('http://foo.com' + req.url)
+      const filename = searchParams.get('filename').replaceAll(' ', '-')
+      fs.writeFileSync(
+        path.join('.', rootDir, filename + '.md'),
+        '# Start typing...'
+      )
+      res.writeHead(301, { Location: '/admin/' + filename }).end()
+    })
+  )
+
+  routes.get('POST').set(
+    '/admin/api/save',
+    createRequestHandler((req, res) => {
+      authenticate(req, res, options)
+      saveFile(req, res)
+      res.writeHead(301, { Location: req.headers.referer }).end()
+    })
+  )
 }
 
-export function getCmsContent(name) {
+export function getContent(name) {
   try {
     return fs.readFileSync(getFilepath(name), { encoding: 'utf8' })
   } catch (error) {

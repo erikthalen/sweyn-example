@@ -22,10 +22,26 @@ export function HMRServer(port = 8080) {
   })
 }
 
-function hmrClientScript(path, port) {
-  return `<script type="module">(await import('${path}')).default(${port})</script>`
-}
+const hmrClient =
+  port => `const connection = new WebSocket('ws://localhost:${port}')
+  connection.onmessage = e => {
+    if (e.data === 'reload') {
+      window.location.reload()
+    } else {
+      console.log(
+        '%c ' + e.data + ' ',
+        'color: green; font-weight:bold; background: lightgreen; border-radius: 3px'
+      )
+    }
+  }
 
-export function injectHMR(str, path, port) {
-  return str.replace('<head>', '<head>' + hmrClientScript(path, port))
+  connection.onclose = function () {
+    window.location.reload()
+  }`
+
+export function injectHMR(str, port) {
+  return str.replace(
+    '<head>',
+    `<head><script type="module">${hmrClient(port)}</script>`
+  )
 }

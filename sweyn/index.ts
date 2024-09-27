@@ -2,28 +2,28 @@ import fs from 'node:fs'
 import path from 'node:path'
 import http from 'node:http'
 import fsPromise from 'node:fs/promises'
-import { renderFile } from './renderer.ts'
-import { HMRServer, injectHMR } from './hmr.server.ts'
-import {
-  createServer,
-  handleError,
-  middlewares,
-  routes,
-  staticFolders,
-} from './server.ts'
-import api from './api.server.ts'
+import { renderFile, renderVariables } from './renderer.ts'
+import { HMRServer, injectHMR } from './hmr.ts'
+import { createServer, middlewares, routes, staticFolders } from './server.ts'
+import api from './api.ts'
+import { createRequestHandler } from './helpers.ts'
+import { createCms } from './cms.ts'
 
 function defaultHandler(file: string, port?: number) {
-  return async function (req: http.IncomingMessage, res: http.ServerResponse) {
-    const page = await renderFile(file, { [file.replace(':', '')]: req.url })
+  return createRequestHandler(
+    async (req: http.IncomingMessage, res: http.ServerResponse) => {
+      const page = await renderFile(file, {
+        [file.replace('[', '').replace(']', '')]: req.url,
+      })
 
-    if (process.env.NODE_ENV === 'dev') {
-      const withHMR = injectHMR(page, '../sweyn/hmr.client.js', port)
-      res.end(withHMR)
-    } else {
-      res.end(page)
+      if (process.env.NODE_ENV === 'dev') {
+        const withHMR = injectHMR(page, port)
+        return withHMR
+      } else {
+        return page
+      }
     }
-  }
+  )
 }
 
 type Route = {
@@ -36,13 +36,17 @@ type Config = {
   port?: number
   hmrPort?: number
   static?: string | string[]
+  cms: {
+    login: string
+    password: string
+  }
   plugins?: ((req: http.IncomingMessage, res: http.ServerResponse) => void)[]
   routes?: Route[]
 }
 
 async function init(config: Config) {
   const defaults = {
-    static: ['pages'],
+    static: ['pages', 'sweyn'],
     pagesDir: './pages',
     snippetsDir: './snippets',
     snippetsBaseEndpoint: '/snippets',
@@ -51,6 +55,13 @@ async function init(config: Config) {
   }
 
   HMRServer(config.hmrPort)
+
+  if (config.cms) {
+    createCms({
+      username: config.cms.login,
+      password: config.cms.password,
+    })
+  }
 
   // add hmr to the error page
   routes.get('GET')?.set('error', defaultHandler('error', config.hmrPort))
@@ -103,23 +114,21 @@ async function init(config: Config) {
   if (fs.existsSync(defaults.snippetsDir)) {
     const snippets = await fsPromise.readdir(defaults.snippetsDir)
 
-    snippets.forEach(snippet => {
+    snippets.forEach(async snippet => {
       const name = path.parse(snippet).name
       const route = path.join(defaults.snippetsBaseEndpoint, name)
-      const handler = async (req, res) => {
-        try {
-          const file = await fsPromise.readFile(
-            path.join(defaults.snippetsDir, snippet)
-          )
+      const handler = await createRequestHandler(async (req, res) => {
+        const { searchParams } = new URL('http://foo.com' + req.url)
+        const data = Object.fromEntries(searchParams.entries())
 
-          res.end(file)
-        } catch (error) {
-          handleError(req, res, {
-            status: 404,
-            message: 'no snippet named:' + snippet,
-          })
-        }
-      }
+        const file = await fsPromise.readFile(
+          path.join(defaults.snippetsDir, snippet)
+        )
+
+        res.setHeader('Content-Type', 'text/html')
+
+        return renderVariables(file.toString(), data)
+      })
 
       routes.get('GET')?.set(route, handler)
     })

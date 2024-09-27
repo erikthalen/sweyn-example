@@ -2,7 +2,9 @@ console.log('hello from app.js')
 
 if (window.location.pathname === '/') {
   try {
-    const res = await fetch('/snippets/example')
+    const searchParams = new URLSearchParams()
+    searchParams.set('data', 'this is some data 🥸')
+    const res = await fetch('/snippets/example?' + searchParams.toString())
 
     if (!res.ok) throw 'noooo'
 
@@ -26,3 +28,10 @@ if (window.location.pathname === '/') {
     console.warn(error)
   }
 }
+
+const firstRes = await fetch('/api/multiple/first')
+const firstText = await firstRes.text()
+console.log(firstText)
+const secondRes = await fetch('/api/multiple/second')
+const secondText = await secondRes.text()
+console.log(secondText)
